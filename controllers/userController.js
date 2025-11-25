@@ -7,10 +7,28 @@ const crypto = require("crypto");
 // Cấu hình email transporter
 const transporter = nodemailer.createTransport({
   service: "gmail",
+  host: "smtp.gmail.com",
+  port: 587,
+  secure: false, // true for 465, false for other ports
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASSWORD,
   },
+  tls: {
+    rejectUnauthorized: false,
+  },
+  debug: true, // Enable debug
+  logger: true, // Enable logger
+});
+
+// Verify email transporter connection
+transporter.verify(function (error, success) {
+  if (error) {
+    console.error("❌ Email transporter verification failed:", error);
+  } else {
+    console.log("✅ Email server is ready to send messages");
+    console.log("📧 Configured email:", process.env.EMAIL_USER);
+  }
 });
 
 // Generate JWT Token
@@ -59,33 +77,60 @@ const sendVerificationEmail = async (email, token, fullName) => {
 
 // Gửi email OTP
 const sendOTPEmail = async (email, otp, fullName) => {
+  console.log("🔧 [sendOTPEmail] Function called with:", {
+    email,
+    otp: otp.substring(0, 3) + "***",
+    fullName,
+  });
   const mailOptions = {
-    from: process.env.EMAIL_USER,
+    from: {
+      name: "🐻 Bear English",
+      address: process.env.EMAIL_USER,
+    },
     to: email,
-    subject: "Mã xác nhận đăng ký - BearEnglish",
+    subject: "🔑 Mã xác nhận đăng ký - Bear English",
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <h2 style="color: #4CAF50;">Chào mừng ${fullName}!</h2>
-        <p>Cảm ơn bạn đã đăng ký tài khoản tại BearEnglish.</p>
+        <h2 style="color: #4CAF50;">🐻 Chào mừng ${fullName}!</h2>
+        <p>Cảm ơn bạn đã đăng ký tài khoản tại <strong>Bear English</strong>.</p>
         <p>Mã OTP xác nhận của bạn là:</p>
         <div style="background-color: #f5f5f5; padding: 20px; text-align: center; margin: 20px 0; border-radius: 8px;">
           <h1 style="color: #4CAF50; margin: 0; font-size: 36px; letter-spacing: 8px;">${otp}</h1>
         </div>
         <p>Mã này sẽ hết hạn sau <strong>10 phút</strong>.</p>
         <p style="color: #999; font-size: 12px; margin-top: 30px;">
-          Nếu bạn không đăng ký tài khoản này, vui lòng bỏ qua email này.
+          ⚠️ Nếu bạn không đăng ký tài khoản này, vui lòng bỏ qua email này.<br>
+          📧 Email này được gửi từ Bear English Learning App.
         </p>
       </div>
     `,
+    text: `Bear English - Mã xác nhận đăng ký\n\nChào ${fullName},\n\nMã OTP của bạn: ${otp}\n\nMã này sẽ hết hạn sau 10 phút.\n\nNếu bạn không đăng ký, vui lòng bỏ qua email này.`,
   };
 
   try {
-    await transporter.sendMail(mailOptions);
-    console.log("✅ OTP đã được gửi đến:", email);
-    return { success: true };
+    console.log(`📧 [sendOTPEmail] Bắt đầu gửi OTP đến: ${email}`);
+    console.log(`🔑 [sendOTPEmail] OTP: ${otp}`);
+    console.log(`👤 [sendOTPEmail] Tên: ${fullName}`);
+
+    const info = await transporter.sendMail(mailOptions);
+
+    console.log("✅ [sendOTPEmail] Email đã gửi thành công!");
+    console.log("📬 [sendOTPEmail] Message ID:", info.messageId);
+    console.log("📨 [sendOTPEmail] Response:", info.response);
+
+    return { success: true, messageId: info.messageId };
   } catch (error) {
-    console.error("❌ Lỗi gửi OTP:", error);
-    return { success: false, error };
+    console.error("❌ [sendOTPEmail] LỖI KHI GỬI EMAIL:");
+    console.error("Error name:", error.name);
+    console.error("Error message:", error.message);
+    console.error("Error code:", error.code);
+    console.error("Error stack:", error.stack);
+    if (error.response) {
+      console.error("SMTP response:", error.response);
+    }
+    console.error("📧 Email đích:", email);
+
+    return { success: false, error: error.message };
   }
 };
 
@@ -380,17 +425,36 @@ exports.registerMobile = async (req, res) => {
 
     await user.save();
 
-    const emailResult = await sendOTPEmail(email, otp, fullName);
+    console.log("📧 Bắt đầu gửi email OTP...");
+    let emailResult;
+    try {
+      emailResult = await sendOTPEmail(email, otp, fullName);
+      console.log("📧 Kết quả gửi email:", JSON.stringify(emailResult));
+    } catch (err) {
+      console.error("❌ Exception khi gọi sendOTPEmail:", err);
+      emailResult = { success: false, error: err.message };
+    }
 
-    let message = "Đăng ký thành công! Vui lòng kiểm tra email để lấy mã OTP.";
-    if (!emailResult.success) {
+    let message = "Đăng ký thành công! Mã OTP đã được gửi đến email của bạn.";
+    let emailSent = true;
+
+    console.log("🔍 Checking emailResult.success:", emailResult.success);
+    if (!emailResult || !emailResult.success) {
       message =
         "Đăng ký thành công, nhưng không thể gửi email OTP. Vui lòng thử lại sau.";
+      emailSent = false;
+      console.error("⚠️ Email gửi thất bại:", emailResult?.error);
+    } else {
+      console.log(
+        "✅ Email đã gửi thành công, messageId:",
+        emailResult.messageId
+      );
     }
 
     res.status(201).json({
       success: true,
       message: message,
+      emailSent: emailSent,
       data: {
         userId: user._id,
         email: user.email,
